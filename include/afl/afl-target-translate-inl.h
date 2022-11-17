@@ -9,6 +9,21 @@ CPUState *aflCurrentCPU;
 
 void gen_aflBBlock(target_ulong pc);
 
+// BEGIN_PYPANDA_NEEDS_THIS -- do not delete this comment bc pypanda
+// api autogen needs it.  And don't put any compiler directives
+// between this and END_PYPANDA_NEEDS_THIS except includes of other
+// files in this directory that contain subsections like this one.
+
+// from afl-target-translate-inl.h
+target_ulong afl_startForkserver(void *env, target_ulong enableTicks);
+target_ulong afl_getWork(void *env, uint64_t ptr, target_ulong sz, bool write_to_guest_mem);
+target_ulong afl_startWork(void *env, target_ulong start, target_ulong end);
+target_ulong afl_doneWork(void *env, target_ulong val);
+// END_PYPANDA_NEEDS_THIS -- do not delete this comment!
+
+
+
+
 static target_ulong startForkserver(CPUArchState *env, target_ulong enableTicks)
 {
     int pid = getpid();
@@ -41,6 +56,7 @@ static target_ulong startForkserver(CPUArchState *env, target_ulong enableTicks)
 }
 
 
+
 typedef struct state_patch_entry {
     uint8_t addr;
     uint8_t val;
@@ -61,7 +77,7 @@ static void afl_maybe_add_to_persistent_log(uint8_t *buf, size_t len) {
 }
 
 /* copy work into ptr[0..sz].  Assumes memory range is locked. */
-static target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz)
+static target_ulong getWork(CPUArchState *env, uint64_t ptr, target_ulong sz, bool write_to_guest_mem)
 {
     target_ulong retsz;
     FILE *fp;
@@ -78,7 +94,11 @@ static target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz
         *shared_buf_len = *shared_buf_len > AFL_MAX_INPUT ? AFL_MAX_INPUT : *shared_buf_len;
         afl_maybe_add_to_persistent_log(shared_buf, *shared_buf_len);
 
-        cpu_physical_memory_rw(ptr, shared_buf, *shared_buf_len, 1);
+        if(write_to_guest_mem){
+            cpu_physical_memory_rw(ptr, shared_buf, *shared_buf_len, 1);
+        } else {
+            memcpy(ptr, shared_buf, *shared_buf_len);
+        }
         return *shared_buf_len;
     }
     if (aflReplayFile) {
@@ -132,7 +152,11 @@ static target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz
         }
 
         // Shannon has one contigous address space, so we can directly write physmem
-        cpu_physical_memory_rw(ptr, afl_persistent_cache_cur_input() , len, 1);
+        if(write_to_guest_mem){
+            cpu_physical_memory_rw(ptr, afl_persistent_cache_cur_input() , len, 1);
+        } else {
+            memcpy(ptr, afl_persistent_cache_cur_input(), len);
+        }
         afl_persistent_cache_pos = afl_persistent_cache_calc_next_pos();
         return len;
     }
@@ -172,8 +196,12 @@ static target_ulong getWork(CPUArchState *env, target_ulong ptr, target_ulong sz
 
     afl_maybe_add_to_persistent_log(bufptr, retsz);
 
-    // Shannon has one contigous address space, so we can directly write physmem
-    cpu_physical_memory_rw(ptr, bufptr, retsz, 1);
+    if(write_to_guest_mem){
+        // Shannon has one contigous address space, so we can directly write physmem
+        cpu_physical_memory_rw(ptr, bufptr, retsz, 1);
+    } else {
+        memcpy(ptr, bufptr, retsz);
+    }
 
 #endif
     fclose(fp);
@@ -249,7 +277,7 @@ uint32_t helper_aflCall32(CPUArchState *env, uint32_t code, uint32_t a0, uint32_
 target_ulong helper_aflCall(CPUArchState *env, target_ulong code, target_ulong a0, target_ulong a1) {
     switch(code) {
     case 1: return (uint32_t)startForkserver(env, a0);
-    case 2: return (uint32_t)getWork(env, a0, a1);
+    case 2: return (uint32_t)getWork(env, a0, a1, 1); // AFL call comes from guest context, so we write to guest mem
     case 3: return (uint32_t)startWork(env, a0, a1);
     case 4: return (uint32_t)doneWork(env, a0);
     case 5: return (uint32_t)qputs(a0);
@@ -362,3 +390,18 @@ void gen_aflBBlock(target_ulong pc)
         //gen_helper_aflInterceptLog(cpu_env);
 }
 
+
+// Wrappers for PyPanda.
+// No wrappers but direct calls would potentially be more performant, but this works for now.
+target_ulong afl_startForkserver(void *env, target_ulong enableTicks){
+    return startForkserver((CPUArchState *) env, enableTicks);
+}
+target_ulong afl_getWork(void *env, uint64_t ptr, target_ulong sz, bool write_to_guest_mem){
+    return getWork((CPUArchState *) env, ptr, sz, write_to_guest_mem);
+}
+target_ulong afl_startWork(void *env, target_ulong start, target_ulong end){
+    return startWork((CPUArchState *) env, start, end);
+}
+target_ulong afl_doneWork(void *env, target_ulong val){
+    return doneWork((CPUArchState *) env, val);
+}
