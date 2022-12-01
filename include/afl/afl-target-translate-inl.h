@@ -19,6 +19,7 @@ target_ulong afl_startForkserver(void *env, target_ulong enableTicks);
 target_ulong afl_getWork(void *env, uint64_t ptr, target_ulong sz, bool write_to_guest_mem);
 target_ulong afl_startWork(void *env, target_ulong start, target_ulong end);
 target_ulong afl_doneWork(void *env, target_ulong val);
+CPUState * afl_getCurrentCPU(void);
 // END_PYPANDA_NEEDS_THIS -- do not delete this comment!
 
 
@@ -404,4 +405,8 @@ target_ulong afl_startWork(void *env, target_ulong start, target_ulong end){
 }
 target_ulong afl_doneWork(void *env, target_ulong val){
     return doneWork((CPUArchState *) env, val);
+}
+
+CPUState * afl_getCurrentCPU(void){
+    return aflCurrentCPU;
 }
